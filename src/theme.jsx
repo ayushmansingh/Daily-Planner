@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'daily-planner-theme';
 const DEFAULT_THEME = 'bauhaus';
-export const THEMES = ['bauhaus', 'japandi'];
+export const THEMES = ['bauhaus', 'japandi', 'eightbit'];
 
 const ThemeContext = createContext({ theme: DEFAULT_THEME, setTheme: () => {} });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 
 // A small signature so the briefing only re-fetches when something
@@ -33,6 +33,11 @@ export default function TodayBriefing({ tasks }) {
 
   const sig = useMemo(() => taskSignature(tasks), [tasks]);
 
+  // Dedup guard: avoid duplicate fetches from React StrictMode's double-mount
+  // and from navigating back into Today when nothing has actually changed.
+  // Manual refresh (the ↻ button) bypasses this by calling fetchBriefing(true).
+  const lastFetchedSig = useRef(null);
+
   const fetchBriefing = useCallback(async (refresh = false) => {
     setLoading(true);
     setError(null);
@@ -47,6 +52,8 @@ export default function TodayBriefing({ tasks }) {
   }, []);
 
   useEffect(() => {
+    if (lastFetchedSig.current === sig) return;
+    lastFetchedSig.current = sig;
     fetchBriefing();
   }, [sig, fetchBriefing]);
 

@@ -53,7 +53,7 @@ export default function QuickAdd({ projects, defaultProjectId, onSave, onClose }
       title,
       description: '',
       deadline,
-      state: 'active',
+      state: 'new',
       priority: isPriority,
       projectId,
       tags,

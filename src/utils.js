@@ -15,14 +15,21 @@ export function daysAgo(iso) {
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
+// Active backlog — everything except done and parked.
+// Parked tasks are intentionally deferred; they shouldn't bubble up anywhere
+// except the project board's parked drawer and the "All Parked" view.
+export function isOpen(task) {
+  return task.state !== 'done' && task.state !== 'parked';
+}
+
 export function isStale(task) {
-  if (task.state === 'done') return false;
+  if (!isOpen(task)) return false;
   const ref = task.updatedAt || task.createdAt;
   return daysAgo(ref) >= 7;
 }
 
 export function isFollowUpDue(task) {
-  if (task.state === 'done') return false;
+  if (!isOpen(task)) return false;
   if (!task.followUpDate) return false;
   return new Date(task.followUpDate) < endOfToday();
 }

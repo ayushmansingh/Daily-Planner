@@ -35,7 +35,18 @@ export default function TaskCard({
 
   return (
     <div
-      className={`task-card ${task.priority ? 'priority' : ''} ${task.state === 'done' ? 'done' : ''} ${isHeavy ? 'heavy' : ''} ${isStale ? 'stale' : ''} ${compact ? 'compact' : ''}`}
+      className={[
+        'task-card',
+        `state-${task.state}`,
+        task.priority && 'priority',
+        task.state === 'done' && 'done',
+        task.state === 'parked' && 'parked',
+        isHeavy && 'heavy',
+        isStale && 'stale',
+        compact && 'compact',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       draggable={draggable}
       onDragStart={onDragStart}
       onClick={() => onEdit(task)}

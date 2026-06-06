@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import DatePicker from './DatePicker.jsx';
+import { STATES, STATE_LABELS, STATE_HINTS, DEFAULT_STATE } from '../states.js';
 
 function toDateInput(iso) {
   if (!iso) return '';
@@ -19,7 +20,7 @@ export default function TaskModal({ task, projects, defaultProjectId, onSave, on
   const [description, setDescription] = useState(task?.description || '');
   const [deadline, setDeadline] = useState(toDateInput(task?.deadline));
   const [followUpDate, setFollowUpDate] = useState(toDateInput(task?.followUpDate));
-  const [state, setState] = useState(task?.state || 'active');
+  const [state, setState] = useState(task?.state || DEFAULT_STATE);
   const [priority, setPriority] = useState(!!task?.priority);
   const [projectId, setProjectId] = useState(task?.projectId || defaultProjectId);
   const [waitingOn, setWaitingOn] = useState(task?.waitingOn || '');
@@ -44,7 +45,7 @@ export default function TaskModal({ task, projects, defaultProjectId, onSave, on
     });
   };
 
-  const pendingHint = state === 'pending' && !waitingOn;
+  const waitingNeedsName = state === 'waiting' && !waitingOn;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -83,10 +84,13 @@ export default function TaskModal({ task, projects, defaultProjectId, onSave, on
             <div className="col">
               <label>State</label>
               <select value={state} onChange={(e) => setState(e.target.value)}>
-                <option value="active">Active</option>
-                <option value="pending">Pending</option>
-                <option value="done">Done</option>
+                {STATES.map((s) => (
+                  <option key={s} value={s}>
+                    {STATE_LABELS[s]}
+                  </option>
+                ))}
               </select>
+              <div className="state-hint">{STATE_HINTS[state]}</div>
             </div>
           </div>
 
@@ -107,7 +111,7 @@ export default function TaskModal({ task, projects, defaultProjectId, onSave, on
 
           <div className="row">
             <div className="col">
-              <label>Waiting on {pendingHint && <span className="hint-inline">(recommended for pending)</span>}</label>
+              <label>Waiting on {waitingNeedsName && <span className="hint-inline">(who are you waiting on?)</span>}</label>
               <input
                 value={waitingOn}
                 onChange={(e) => setWaitingOn(e.target.value)}

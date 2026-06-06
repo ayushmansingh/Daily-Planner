@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { isStale, isFollowUpDue, daysAgo } from '../utils.js';
+import { isStale, isFollowUpDue, isOpen, daysAgo } from '../utils.js';
+import { STATES, STATE_LABELS, STATE_ICONS } from '../states.js';
 
 export default function Sidebar({
   projects,
@@ -15,7 +16,11 @@ export default function Sidebar({
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
 
-  const open = tasks.filter((t) => t.state !== 'done');
+  const open = tasks.filter(isOpen);
+
+  const stateCounts = Object.fromEntries(
+    STATES.map((s) => [s, tasks.filter((t) => t.state === s).length]),
+  );
 
   const counts = {
     today: open.filter((t) => {
@@ -27,11 +32,9 @@ export default function Sidebar({
       end.setDate(end.getDate() + 1);
       return d < end;
     }).length,
-    active: tasks.filter((t) => t.state === 'active').length,
-    pending: tasks.filter((t) => t.state === 'pending').length,
-    done: tasks.filter((t) => t.state === 'done').length,
     followups: open.filter(isFollowUpDue).length,
     stale: open.filter(isStale).length,
+    ...stateCounts,
   };
 
   const submit = (e) => {
@@ -75,9 +78,15 @@ export default function Sidebar({
       <NavItem id="stale" icon="🪦" label="Stale" count={counts.stale} />
 
       <div className="section-label">Across projects</div>
-      <NavItem id="state:active" icon="🟣" label="All Active" count={counts.active} />
-      <NavItem id="state:pending" icon="🟡" label="All Pending" count={counts.pending} />
-      <NavItem id="state:done" icon="🟢" label="All Done" count={counts.done} />
+      {STATES.map((s) => (
+        <NavItem
+          key={s}
+          id={`state:${s}`}
+          icon={STATE_ICONS[s]}
+          label={`All ${STATE_LABELS[s]}`}
+          count={counts[s]}
+        />
+      ))}
 
       <div className="section-label">Projects</div>
       {projects.map((p) => {

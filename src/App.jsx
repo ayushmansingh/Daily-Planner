@@ -7,6 +7,7 @@ import ListView from './components/ListView.jsx';
 import TaskModal from './components/TaskModal.jsx';
 import QuickAdd from './components/QuickAdd.jsx';
 import ThemeToggle from './components/ThemeToggle.jsx';
+import CommandPalette from './components/CommandPalette.jsx';
 import { isStale, isFollowUpDue } from './utils.js';
 
 function parseView(view) {
@@ -25,6 +26,7 @@ export default function App() {
   const [activeView, setActiveView] = useState('today');
   const [editingTask, setEditingTask] = useState(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -40,6 +42,12 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e) => {
+      // ⌘K / Ctrl+K — works even when typing (toggles the palette)
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+        return;
+      }
       const tag = e.target.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable;
       if (typing) return;
@@ -263,7 +271,7 @@ export default function App() {
               + New task
             </button>
             <span className="hint">
-              <kbd>N</kbd> quick add · <kbd>T</kbd> today
+              <kbd>⌘K</kbd> search · <kbd>N</kbd> add · <kbd>T</kbd> today
             </span>
             <ThemeToggle />
           </div>
@@ -286,6 +294,17 @@ export default function App() {
           defaultProjectId={defaultProjectId}
           onSave={handleQuickAdd}
           onClose={() => setQuickAddOpen(false)}
+        />
+      )}
+      {paletteOpen && (
+        <CommandPalette
+          tasks={tasks}
+          projects={projects}
+          onOpenTask={(t) => {
+            setPaletteOpen(false);
+            setEditingTask(t);
+          }}
+          onClose={() => setPaletteOpen(false)}
         />
       )}
     </div>

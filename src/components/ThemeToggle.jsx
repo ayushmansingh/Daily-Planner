@@ -1,6 +1,6 @@
 import { useTheme, THEMES } from '../theme.jsx';
 
-const LABELS = { bauhaus: 'Bauhaus', japandi: 'Japandi' };
+const LABELS = { bauhaus: 'Bauhaus', japandi: 'Japandi', eightbit: '8-Bit' };
 
 export default function ThemeToggle() {
   const { theme, setTheme } = useTheme();

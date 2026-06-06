@@ -1,12 +1,12 @@
 import TaskCard from './TaskCard.jsx';
 import TodayBriefing from './TodayBriefing.jsx';
-import { sortTasks, startOfToday, endOfToday, isFollowUpDue } from '../utils.js';
+import { sortTasks, startOfToday, endOfToday, isFollowUpDue, isOpen } from '../utils.js';
 
 export default function TodayView({ tasks, projects, onEdit, onUpdate, onDelete }) {
   const start = startOfToday();
   const end = endOfToday();
 
-  const open = tasks.filter((t) => t.state !== 'done');
+  const open = tasks.filter(isOpen);
 
   const followUpsToday = open.filter(isFollowUpDue);
   const followUpIds = new Set(followUpsToday.map((t) => t.id));

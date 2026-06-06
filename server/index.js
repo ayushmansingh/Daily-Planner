@@ -15,10 +15,35 @@ const DEFAULT_DATA = {
   tasks: [],
 };
 
+// State model. Keep in sync with src/states.js on the client.
+const STATES = ['new', 'doing', 'waiting', 'done', 'parked'];
+const DEFAULT_STATE = 'new';
+
+// Migrate legacy state names. Idempotent.
+// Returns true if anything changed so the caller knows to persist.
+function migrateTasks(tasks) {
+  let dirty = false;
+  for (const t of tasks) {
+    if (t.state === 'active') {
+      t.state = 'new';
+      dirty = true;
+    } else if (t.state === 'pending') {
+      t.state = 'waiting';
+      dirty = true;
+    }
+  }
+  return dirty;
+}
+
 async function readData() {
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
-    return JSON.parse(raw);
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.tasks) && migrateTasks(data.tasks)) {
+      await writeData(data);
+      console.log('[migration] remapped legacy task states (active→new, pending→waiting)');
+    }
+    return data;
   } catch (err) {
     if (err.code === 'ENOENT') {
       await writeData(DEFAULT_DATA);
@@ -81,7 +106,7 @@ app.post('/api/tasks', async (req, res) => {
     title: req.body.title || 'Untitled task',
     description: req.body.description || '',
     deadline: req.body.deadline || null,
-    state: req.body.state || 'active',
+    state: STATES.includes(req.body.state) ? req.body.state : DEFAULT_STATE,
     priority: !!req.body.priority,
     projectId: req.body.projectId || 'inbox',
     tags: req.body.tags || [],
@@ -137,7 +162,10 @@ function buildDigest(tasks, projects, now = new Date()) {
   const daysFromNow = (iso) =>
     iso ? Math.floor((Date.now() - new Date(iso).getTime()) / MS_DAY) : 0;
 
-  const open = tasks.filter((t) => t.state !== 'done');
+  // Active backlog = everything except done and parked.
+  // Parked items are intentionally deferred — they don't apply pressure.
+  const open = tasks.filter((t) => t.state !== 'done' && t.state !== 'parked');
+  const newToTriage = tasks.filter((t) => t.state === 'new');
 
   const followUpsDue = open.filter(
     (t) => t.followUpDate && new Date(t.followUpDate) < end,
@@ -167,32 +195,20 @@ function buildDigest(tasks, projects, now = new Date()) {
   );
   const floatingIds = new Set(priorityFloating.map((t) => t.id));
 
-  const stale = open
-    .filter((t) => {
-      const ref = t.updatedAt || t.createdAt;
-      return (
-        daysFromNow(ref) >= 7 &&
-        !followUpIds.has(t.id) &&
-        !overdueIds.has(t.id) &&
-        !todayIds.has(t.id) &&
-        !floatingIds.has(t.id)
-      );
-    })
-    .slice(0, 5);
+  const stale = open.filter((t) => {
+    const ref = t.updatedAt || t.createdAt;
+    return (
+      daysFromNow(ref) >= 7 &&
+      !followUpIds.has(t.id) &&
+      !overdueIds.has(t.id) &&
+      !todayIds.has(t.id) &&
+      !floatingIds.has(t.id)
+    );
+  });
 
   // Anything I'm waiting on someone for — useful even if the follow-up date
-  // hasn't hit yet. Sorted by longest wait.
-  const blocked = open
-    .filter((t) => t.waitingOn && !followUpIds.has(t.id))
-    .map((t) => ({
-      title: t.title,
-      project: nameOf(t.projectId),
-      waitingOn: t.waitingOn,
-      daysWaiting: daysFromNow(t.updatedAt || t.createdAt),
-      priority: !!t.priority,
-    }))
-    .sort((a, b) => b.daysWaiting - a.daysWaiting)
-    .slice(0, 5);
+  // hasn't hit yet.
+  const blocked = open.filter((t) => t.waitingOn && !followUpIds.has(t.id));
 
   const doneToday = tasks.filter(
     (t) => t.state === 'done' && t.completedAt && new Date(t.completedAt) >= start,
@@ -209,38 +225,103 @@ function buildDigest(tasks, projects, now = new Date()) {
     '-' +
     String(start.getDate()).padStart(2, '0');
 
+  // Caps per bucket. Keeps the digest stable in size even at 100+ tasks.
+  // Each capped bucket is paired with a *Count field so Haiku knows when
+  // there are more than what's shown.
+  const TOP = {
+    overdue: 7,
+    dueToday: 10,
+    followUpsDue: 7,
+    priorityFloating: 5,
+    blocked: 5,
+    stale: 5,
+    newToTriage: 5,
+  };
+
+  // Sort within each bucket by urgency, then map down to only the fields
+  // Haiku actually needs to write a sharp briefing.
+  const overdueSorted = [...overdue].sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority ? -1 : 1;
+    return new Date(a.deadline) - new Date(b.deadline); // earlier deadline = more overdue
+  });
+  const dueTodaySorted = [...dueToday].sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority ? -1 : 1;
+    return new Date(a.deadline) - new Date(b.deadline);
+  });
+  const followUpsDueSorted = [...followUpsDue].sort(
+    (a, b) =>
+      daysFromNow(b.updatedAt || b.createdAt) -
+      daysFromNow(a.updatedAt || a.createdAt),
+  );
+  const priorityFloatingSorted = [...priorityFloating].sort(
+    (a, b) =>
+      daysFromNow(b.updatedAt || b.createdAt) -
+      daysFromNow(a.updatedAt || a.createdAt),
+  );
+  const blockedSorted = [...blocked].sort(
+    (a, b) =>
+      daysFromNow(b.updatedAt || b.createdAt) -
+      daysFromNow(a.updatedAt || a.createdAt),
+  );
+  const staleSorted = [...stale].sort(
+    (a, b) =>
+      daysFromNow(b.updatedAt || b.createdAt) -
+      daysFromNow(a.updatedAt || a.createdAt),
+  );
+  const newToTriageSorted = [...newToTriage].sort(
+    (a, b) => daysFromNow(b.createdAt) - daysFromNow(a.createdAt),
+  );
+
   return {
     date: localDate,
-    overdue: overdue.map((t) => ({
+    overdueCount: overdueSorted.length,
+    overdue: overdueSorted.slice(0, TOP.overdue).map((t) => ({
       title: t.title,
       project: nameOf(t.projectId),
       priority: !!t.priority,
       daysLate: t.deadline ? Math.floor((start - new Date(t.deadline)) / MS_DAY) : 0,
       waitingOn: t.waitingOn || null,
     })),
-    followUpsDue: followUpsDue.map((t) => ({
-      title: t.title,
-      project: nameOf(t.projectId),
-      waitingOn: t.waitingOn || null,
-      daysSinceUpdate: daysFromNow(t.updatedAt || t.createdAt),
-    })),
-    dueToday: dueToday.map((t) => ({
+    dueTodayCount: dueTodaySorted.length,
+    dueToday: dueTodaySorted.slice(0, TOP.dueToday).map((t) => ({
       title: t.title,
       project: nameOf(t.projectId),
       priority: !!t.priority,
       waitingOn: t.waitingOn || null,
     })),
-    priorityFloating: priorityFloating.map((t) => ({
+    followUpsDueCount: followUpsDueSorted.length,
+    followUpsDue: followUpsDueSorted.slice(0, TOP.followUpsDue).map((t) => ({
+      title: t.title,
+      project: nameOf(t.projectId),
+      waitingOn: t.waitingOn || null,
+      daysSinceUpdate: daysFromNow(t.updatedAt || t.createdAt),
+    })),
+    priorityFloatingCount: priorityFloatingSorted.length,
+    priorityFloating: priorityFloatingSorted.slice(0, TOP.priorityFloating).map((t) => ({
       title: t.title,
       project: nameOf(t.projectId),
       daysSinceUpdate: daysFromNow(t.updatedAt || t.createdAt),
     })),
-    stale: stale.map((t) => ({
+    blockedCount: blockedSorted.length,
+    blocked: blockedSorted.slice(0, TOP.blocked).map((t) => ({
+      title: t.title,
+      project: nameOf(t.projectId),
+      waitingOn: t.waitingOn,
+      daysWaiting: daysFromNow(t.updatedAt || t.createdAt),
+      priority: !!t.priority,
+    })),
+    staleCount: staleSorted.length,
+    stale: staleSorted.slice(0, TOP.stale).map((t) => ({
       title: t.title,
       project: nameOf(t.projectId),
       daysSinceUpdate: daysFromNow(t.updatedAt || t.createdAt),
     })),
-    blocked,
+    newToTriageCount: newToTriageSorted.length,
+    newToTriage: newToTriageSorted.slice(0, TOP.newToTriage).map((t) => ({
+      title: t.title,
+      project: nameOf(t.projectId),
+      daysSinceCreated: daysFromNow(t.createdAt),
+    })),
     momentum: { doneToday, doneThisWeek },
   };
 }
@@ -299,15 +380,28 @@ Priority order for what to include (drop the bottom if you run out of room):
 4. Today's deadlines
 5. People you're blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
 6. Floating priority items (no deadline)
+7. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks waiting to be triaged"
 
 Hard rules:
 - Only mention people, projects, or task titles that appear in the JSON. Never invent details.
 - If a field is null, do not reference it.
 - Numbers must match the JSON exactly.
 - Refer to people as "@name" using the waitingOn value verbatim.
-- If overdue, followUpsDue, dueToday, AND blocked are all empty, output a single bullet: "• Clear runway. Pick a priority task and protect a focus block."
+- Each bucket has a "*Count" sibling field (overdueCount, dueTodayCount, etc) holding the TRUE total. The array itself is capped at the top items by urgency. When the count exceeds the array length, say so: "5 overdue, top 2: X, Y" — never imply the array is the full list.
+- If overdueCount, followUpsDueCount, dueTodayCount, AND blockedCount are all 0 AND newToTriageCount is 0, output a single bullet: "• Clear runway. Pick a priority task and protect a focus block."
 
 Output ONLY the bullets. No JSON. No preamble. No commentary about the data.`;
+
+// Haiku 4.5 pricing as of 2025-2026 (USD per million tokens).
+// Source: https://docs.anthropic.com/en/docs/about-claude/models
+const HAIKU_PRICING = { inputPerMTok: 1.0, outputPerMTok: 5.0 };
+
+function haikuCostUSD(usage) {
+  if (!usage) return 0;
+  const inUSD = ((usage.input_tokens || 0) / 1_000_000) * HAIKU_PRICING.inputPerMTok;
+  const outUSD = ((usage.output_tokens || 0) / 1_000_000) * HAIKU_PRICING.outputPerMTok;
+  return inUSD + outUSD;
+}
 
 async function callHaiku(digest, apiKey) {
   if (!apiKey) return null;
@@ -335,11 +429,62 @@ async function callHaiku(digest, apiKey) {
     }
     const json = await res.json();
     const text = json.content?.[0]?.text?.trim();
-    return text || null;
+    const usage = json.usage || null;
+    return text ? { text, usage } : null;
   } catch (err) {
     console.error('[briefing] anthropic exception', err.message);
     return null;
   }
+}
+
+function todayLocalYMD() {
+  const n = new Date();
+  return (
+    n.getFullYear() +
+    '-' +
+    String(n.getMonth() + 1).padStart(2, '0') +
+    '-' +
+    String(n.getDate()).padStart(2, '0')
+  );
+}
+
+function recordHaikuUsage(data, usage) {
+  if (!usage) return;
+  const cost = haikuCostUSD(usage);
+  const day = todayLocalYMD();
+  const stats = data.briefingStats || {
+    totalSpendUSD: 0,
+    totalCalls: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    spendByDay: {},
+    lastCall: null,
+  };
+  stats.totalSpendUSD = +(stats.totalSpendUSD + cost).toFixed(6);
+  stats.totalCalls += 1;
+  stats.totalInputTokens += usage.input_tokens || 0;
+  stats.totalOutputTokens += usage.output_tokens || 0;
+  const dayEntry = stats.spendByDay[day] || { calls: 0, usd: 0 };
+  dayEntry.calls += 1;
+  dayEntry.usd = +(dayEntry.usd + cost).toFixed(6);
+  stats.spendByDay[day] = dayEntry;
+  stats.lastCall = {
+    at: new Date().toISOString(),
+    inputTokens: usage.input_tokens || 0,
+    outputTokens: usage.output_tokens || 0,
+    usd: +cost.toFixed(6),
+  };
+  data.briefingStats = stats;
+
+  const inT = usage.input_tokens || 0;
+  const outT = usage.output_tokens || 0;
+  const costStr = '$' + cost.toFixed(5);
+  const todayStr = '$' + dayEntry.usd.toFixed(5);
+  const totalStr = '$' + stats.totalSpendUSD.toFixed(5);
+  console.log(
+    `[briefing] haiku call: ${inT} in + ${outT} out = ${costStr} ` +
+      `| today: ${todayStr} (${dayEntry.calls} calls) | total: ${totalStr}`,
+  );
 }
 
 app.post('/api/briefing', async (req, res) => {
@@ -370,8 +515,12 @@ app.post('/api/briefing', async (req, res) => {
   let text = null;
   let source = 'fallback';
   if (apiKey) {
-    text = await callHaiku(digest, apiKey);
-    if (text) source = 'haiku';
+    const result = await callHaiku(digest, apiKey);
+    if (result) {
+      text = result.text;
+      source = 'haiku';
+      recordHaikuUsage(data, result.usage);
+    }
   }
   if (!text) text = deterministicFallback(digest);
 

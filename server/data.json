@@ -17,7 +17,7 @@
       "title": "Dev Complete Markup",
       "description": "ABC",
       "deadline": null,
-      "state": "pending",
+      "state": "waiting",
       "priority": false,
       "projectId": "inbox",
       "tags": [],
@@ -41,7 +41,7 @@
       "title": "Block Time",
       "description": "",
       "deadline": "2026-06-17T11:30:00.000Z",
-      "state": "active",
+      "state": "new",
       "priority": false,
       "projectId": "inbox",
       "tags": [],
@@ -56,7 +56,7 @@
       "title": "Need to drive adoption",
       "description": "",
       "deadline": "2026-06-06T11:30:00.000Z",
-      "state": "active",
+      "state": "new",
       "priority": true,
       "projectId": "dNJciP50",
       "tags": [],
@@ -68,10 +68,28 @@
     }
   ],
   "briefing": {
-    "hash": "7df89b4259745a542809f6a9187170757522fb7f",
-    "text": "• \"Need to drive adoption\" (Hotels Catch Up) due today. Blocked on @Offline Product—unblock now.\n• \"Block Time\" (Inbox) blocked on @Ravi. Push for response.",
+    "hash": "e8d59447a6237907b67bb5f41858abbfd5fd6a35",
+    "text": "• \"Need to drive adoption\" (Hotels Catch Up) overdue — waiting on @Offline Product.\n• Blocked on @Ravi for \"Block Time\" (0 days).\n• 2 tasks waiting to be triaged.",
     "source": "haiku",
-    "date": "2026-06-06",
-    "generatedAt": "2026-06-06T17:56:10.353Z"
+    "date": "2026-06-07",
+    "generatedAt": "2026-06-06T20:00:12.360Z"
+  },
+  "briefingStats": {
+    "totalSpendUSD": 0.004628,
+    "totalCalls": 4,
+    "totalInputTokens": 3478,
+    "totalOutputTokens": 230,
+    "spendByDay": {
+      "2026-06-07": {
+        "calls": 4,
+        "usd": 0.004628
+      }
+    },
+    "lastCall": {
+      "at": "2026-06-06T20:00:12.360Z",
+      "inputTokens": 908,
+      "outputTokens": 57,
+      "usd": 0.001193
+    }
   }
 }
