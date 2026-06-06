@@ -506,6 +506,86 @@ kbd {
 .topbar-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .hint { color: var(--muted); font-size: 12px; font-family: var(--font-label); }
 
+/* ============== Calendar connect pill ============== */
+.cal-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: var(--stroke-thin) solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  font-family: var(--font-label);
+  font-size: 12px;
+  font-weight: var(--label-weight);
+  text-transform: var(--label-case);
+  letter-spacing: var(--label-tracking);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.cal-connect.cal-connect-off:hover {
+  background: var(--accent);
+  color: var(--accent-on);
+  border-color: var(--accent);
+}
+.cal-connect.cal-connect-on {
+  border-color: var(--success, var(--accent));
+  background: transparent;
+  color: var(--ink);
+  cursor: default;
+}
+[data-theme="japandi"] .cal-connect {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  font-size: 13px;
+}
+[data-theme="bauhaus"] .cal-connect-off { box-shadow: 2px 2px 0 0 var(--ink); }
+[data-theme="bauhaus"] .cal-connect-off:hover { transform: translate(1px, 1px); box-shadow: 1px 1px 0 0 var(--ink); }
+[data-theme="eightbit"] .cal-connect-off {
+  background: #000;
+  color: var(--info);
+  border-color: var(--info);
+  box-shadow: 2px 2px 0 0 #000;
+}
+[data-theme="eightbit"] .cal-connect-off:hover {
+  background: var(--accent);
+  color: var(--accent-on);
+  border-color: #000;
+}
+[data-theme="eightbit"] .cal-connect-on {
+  background: #000;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cal-icon { font-size: 14px; line-height: 1; }
+.cal-email {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-theme="eightbit"] .cal-email { color: var(--accent); }
+.cal-disconnect {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s, background 0.12s;
+}
+.cal-disconnect:hover { color: var(--danger); background: var(--surface-3); }
+
 /* ============== Theme toggle ============== */
 .theme-toggle {
   display: inline-flex;

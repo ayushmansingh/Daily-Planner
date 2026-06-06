@@ -4,6 +4,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { nanoid } from 'nanoid';
 import { createHash } from 'crypto';
+import {
+  loadConfig as loadCalendarConfig,
+  buildAuthUrl,
+  exchangeCodeForTokens,
+  fetchMe,
+  redact,
+} from './calendar.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, 'data.json');
@@ -543,9 +550,119 @@ app.post('/api/briefing', async (req, res) => {
   });
 });
 
+// ============== Calendar (Microsoft Graph) ==============
+// All four routes live here. Token storage uses data.calendarAuth — fully
+// isolated from data.tasks/projects. No raw tokens are ever logged.
+
+// CSRF state for the auth code flow. In-memory only; entries auto-expire.
+const CALENDAR_STATE_TTL_MS = 10 * 60 * 1000;
+const calendarStates = new Map(); // state -> expiresAt
+
+function rememberState(state) {
+  calendarStates.set(state, Date.now() + CALENDAR_STATE_TTL_MS);
+  // Lazy cleanup
+  for (const [s, exp] of calendarStates) {
+    if (exp < Date.now()) calendarStates.delete(s);
+  }
+}
+function consumeState(state) {
+  const exp = calendarStates.get(state);
+  if (!exp || exp < Date.now()) return false;
+  calendarStates.delete(state);
+  return true;
+}
+
+app.get('/api/calendar/connect', (req, res) => {
+  const config = loadCalendarConfig();
+  if (!config) {
+    return res
+      .status(500)
+      .send('Calendar not configured. Set MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REDIRECT_URI in .env.');
+  }
+  const { url, state } = buildAuthUrl(config);
+  rememberState(state);
+  console.log('[calendar] redirecting to Microsoft for consent (state stored)');
+  res.redirect(url);
+});
+
+app.get('/api/calendar/callback', async (req, res) => {
+  const { code, state, error, error_description: errorDescription } = req.query;
+  if (error) {
+    console.error('[calendar] callback error:', error, errorDescription);
+    return res
+      .status(400)
+      .send(`Microsoft rejected the sign-in: ${error}\n\n${errorDescription || ''}\n\nClose this tab and try again.`);
+  }
+  if (!code || !state || !consumeState(String(state))) {
+    return res.status(400).send('Invalid or expired callback. Close this tab and try again.');
+  }
+  const config = loadCalendarConfig();
+  if (!config) return res.status(500).send('Calendar not configured.');
+
+  try {
+    const tokens = await exchangeCodeForTokens(config, String(code));
+    const me = await fetchMe(tokens.access_token);
+    const data = await readData();
+    data.calendarAuth = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      // expires_in is seconds; subtract 30s buffer for clock skew
+      accessTokenExpiresAt: Date.now() + (tokens.expires_in - 30) * 1000,
+      scope: tokens.scope,
+      connectedAt: new Date().toISOString(),
+      user: {
+        displayName: me.displayName,
+        email: me.mail || me.userPrincipalName,
+        id: me.id,
+      },
+    };
+    await writeData(data);
+    console.log(
+      `[calendar] connected as ${data.calendarAuth.user.email} | token ${redact(tokens.access_token)} | refresh ${redact(tokens.refresh_token)}`,
+    );
+    // Nice landing page that auto-closes the popup or links back to the app.
+    res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title>
+      <style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#fcf9f8;color:#1b1b1b}
+      .card{text-align:center;padding:40px;border:2px solid #1b1b1b;background:#fff}h1{margin:0 0 8px}p{color:#5b403f;margin:8px 0}a{color:#b7102a;font-weight:600}</style></head>
+      <body><div class="card"><h1>✓ Outlook connected</h1><p>Signed in as <strong>${data.calendarAuth.user.email}</strong></p><p><a href="http://localhost:5173">← Back to Daily Planner</a></p></div>
+      <script>setTimeout(()=>{window.location='http://localhost:5173'},1500)</script></body></html>`);
+  } catch (err) {
+    console.error('[calendar] token exchange failed:', err.message);
+    res.status(500).send(`Token exchange failed: ${err.message}\n\nClose this tab and try again.`);
+  }
+});
+
+app.get('/api/calendar/status', async (_req, res) => {
+  const data = await readData();
+  const auth = data.calendarAuth;
+  if (!auth) {
+    const configured = !!loadCalendarConfig();
+    return res.json({ connected: false, configured });
+  }
+  res.json({
+    connected: true,
+    configured: true,
+    user: auth.user,
+    connectedAt: auth.connectedAt,
+    scope: auth.scope,
+  });
+});
+
+app.post('/api/calendar/disconnect', async (_req, res) => {
+  const data = await readData();
+  if (data.calendarAuth) {
+    console.log(`[calendar] disconnecting ${data.calendarAuth.user?.email || '(unknown user)'}`);
+    delete data.calendarAuth;
+    await writeData(data);
+  }
+  res.json({ ok: true });
+});
+
 const PORT = 5174;
 app.listen(PORT, () => {
   const ai = process.env.ANTHROPIC_API_KEY ? 'ON (Haiku 4.5)' : 'OFF (no ANTHROPIC_API_KEY)';
+  const cal = loadCalendarConfig() ? 'CONFIGURED' : 'OFF (set MS_* env vars)';
   console.log(`[server] listening on http://localhost:${PORT}`);
   console.log(`[briefing] AI summaries: ${ai}`);
+  console.log(`[calendar] Outlook integration: ${cal}`);
 });

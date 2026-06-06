@@ -39,4 +39,14 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: '{}',
     }).then(j),
+
+  calendar: {
+    status: () => fetch('/api/calendar/status').then(j),
+    // Full-page navigation — the OAuth flow needs the browser to follow
+    // 302s through Microsoft and back to /callback. fetch() doesn't navigate.
+    connect: () => {
+      window.location.href = '/api/calendar/connect';
+    },
+    disconnect: () => fetch('/api/calendar/disconnect', { method: 'POST' }).then(j),
+  },
 };

@@ -19,8 +19,9 @@ build/
 *.log
 npm-debug.log*
 
-# local data (uncomment if you want to keep tasks out of git)
-# server/data.json
+# local data — contains tasks + briefing cache + OAuth refresh tokens.
+# Must stay out of git once calendar auth is wired up.
+server/data.json
 
 # claude
 .claude/settings.local.json

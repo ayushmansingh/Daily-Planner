@@ -8,6 +8,7 @@ import TaskModal from './components/TaskModal.jsx';
 import QuickAdd from './components/QuickAdd.jsx';
 import ThemeToggle from './components/ThemeToggle.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
+import CalendarConnect from './components/CalendarConnect.jsx';
 import { isStale, isFollowUpDue } from './utils.js';
 
 function parseView(view) {
@@ -267,6 +268,7 @@ export default function App() {
             {headerInfo.sub && <div className="topbar-sub">{headerInfo.sub}</div>}
           </div>
           <div className="topbar-actions">
+            <CalendarConnect />
             <button className="btn-primary" onClick={() => setEditingTask({ __new: true })}>
               + New task
             </button>
