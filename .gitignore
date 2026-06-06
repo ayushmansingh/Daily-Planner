@@ -1,0 +1,29 @@
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# dependencies
+node_modules/
+
+# build
+dist/
+build/
+
+# editor
+.DS_Store
+.vscode/
+.idea/
+
+# logs
+*.log
+npm-debug.log*
+
+# local data (uncomment if you want to keep tasks out of git)
+# server/data.json
+
+# claude
+.claude/settings.local.json
+
+# stitch design downloads
+_stitch_designs/

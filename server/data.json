@@ -1,0 +1,77 @@
+{
+  "projects": [
+    {
+      "id": "inbox",
+      "name": "Inbox",
+      "color": "#6b7280"
+    },
+    {
+      "id": "dNJciP50",
+      "name": "Hotels Catch Up",
+      "color": "#ec4899"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "VuMayURnGS",
+      "title": "Dev Complete Markup",
+      "description": "ABC",
+      "deadline": null,
+      "state": "pending",
+      "priority": false,
+      "projectId": "inbox",
+      "tags": [],
+      "createdAt": "2026-06-06T14:33:10.440Z"
+    },
+    {
+      "id": "Gd8a0WUF8z",
+      "title": "Draft for PRD",
+      "description": "",
+      "deadline": null,
+      "state": "done",
+      "priority": true,
+      "projectId": "inbox",
+      "tags": [],
+      "createdAt": "2026-06-06T14:51:30.481Z",
+      "updatedAt": "2026-06-06T17:11:45.384Z",
+      "completedAt": "2026-06-06T17:11:45.384Z"
+    },
+    {
+      "id": "yC0kZlhKCt",
+      "title": "Block Time",
+      "description": "",
+      "deadline": "2026-06-17T11:30:00.000Z",
+      "state": "active",
+      "priority": false,
+      "projectId": "inbox",
+      "tags": [],
+      "waitingOn": "Ravi",
+      "followUpDate": "2026-06-10T03:30:00.000Z",
+      "createdAt": "2026-06-06T17:12:21.862Z",
+      "updatedAt": "2026-06-06T17:12:21.862Z",
+      "completedAt": null
+    },
+    {
+      "id": "i2xsK3POus",
+      "title": "Need to drive adoption",
+      "description": "",
+      "deadline": "2026-06-06T11:30:00.000Z",
+      "state": "active",
+      "priority": true,
+      "projectId": "dNJciP50",
+      "tags": [],
+      "waitingOn": "Offline Product",
+      "followUpDate": null,
+      "createdAt": "2026-06-06T17:56:06.582Z",
+      "updatedAt": "2026-06-06T17:56:06.582Z",
+      "completedAt": null
+    }
+  ],
+  "briefing": {
+    "hash": "7df89b4259745a542809f6a9187170757522fb7f",
+    "text": "• \"Need to drive adoption\" (Hotels Catch Up) due today. Blocked on @Offline Product—unblock now.\n• \"Block Time\" (Inbox) blocked on @Ravi. Push for response.",
+    "source": "haiku",
+    "date": "2026-06-06",
+    "generatedAt": "2026-06-06T17:56:10.353Z"
+  }
+}
