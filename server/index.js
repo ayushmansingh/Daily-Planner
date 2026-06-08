@@ -14,6 +14,8 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, 'data.json');
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const CALENDAR_CACHE_FILE = path.join(PROJECT_ROOT, 'cache', 'calendar.json');
 
 const DEFAULT_DATA = {
   projects: [
@@ -158,7 +160,219 @@ app.delete('/api/tasks/:id', async (req, res) => {
 
 const MS_DAY = 86400000;
 
-function buildDigest(tasks, projects, now = new Date()) {
+// Resolve the user's effective timezone for pacing + formatting.
+// Priority: explicit env override → calendar cache → system local.
+function resolveTimezone(calendarCache) {
+  if (process.env.PLANNER_TZ) return process.env.PLANNER_TZ;
+  if (calendarCache && calendarCache.timezone) return calendarCache.timezone;
+  return null; // null → use system local
+}
+
+// HH:mm formatting in a given IANA tz. Returns "" if it can't format.
+function fmtHHmmTz(iso, tz) {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    if (!tz) {
+      return (
+        String(d.getHours()).padStart(2, '0') +
+        ':' +
+        String(d.getMinutes()).padStart(2, '0')
+      );
+    }
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(d);
+  } catch {
+    return '';
+  }
+}
+
+// Decimal hour-of-day (e.g. 17.73) in the given tz, used for dayPhase + work
+// fraction. Falls back to system local when tz is null.
+function localHourInTz(now, tz) {
+  if (!tz) return now.getHours() + now.getMinutes() / 60;
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+    const h = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+    const m = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+    return h + m / 60;
+  } catch {
+    return now.getHours() + now.getMinutes() / 60;
+  }
+}
+
+// Local YYYY-MM-DD in a given tz, used to bound today/tomorrow on the calendar.
+function localYMDInTz(d, tz) {
+  if (!tz) {
+    return (
+      d.getFullYear() +
+      '-' +
+      String(d.getMonth() + 1).padStart(2, '0') +
+      '-' +
+      String(d.getDate()).padStart(2, '0')
+    );
+  }
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(d);
+    const y = parts.find((p) => p.type === 'year').value;
+    const mo = parts.find((p) => p.type === 'month').value;
+    const da = parts.find((p) => p.type === 'day').value;
+    return `${y}-${mo}-${da}`;
+  } catch {
+    return localYMDInTz(d, null);
+  }
+}
+
+// Calendar cache produced by Codex (or any external agent) on a 30-min
+// schedule. We read it; we never write to it. If the file is missing,
+// unreadable, or malformed, we treat calendar as simply absent — the
+// briefing still works without it.
+async function loadCalendarCache() {
+  try {
+    const raw = await fs.readFile(CALENDAR_CACHE_FILE, 'utf8');
+    const json = JSON.parse(raw);
+    if (!json || !Array.isArray(json.events)) return null;
+    return json;
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn('[calendar-cache] unreadable:', err.message);
+    }
+    return null;
+  }
+}
+
+const CANCELLED_RE = /^cancell?ed:\s*/i;
+
+function isOnlineEvent(ev) {
+  const loc = (ev.location || '').toLowerCase();
+  if (loc.includes('teams meeting') || loc.includes('zoom') || loc.includes('meet.google')) {
+    return true;
+  }
+  const body = (ev.bodyPreview || '').toLowerCase();
+  return body.includes('teams.microsoft.com/meet') || body.includes('zoom.us/j/');
+}
+
+function buildCalendarSlice(cache, now, tz) {
+  if (!cache) return null;
+  const todayYMD = localYMDInTz(now, tz);
+  const tomorrowYMD = localYMDInTz(new Date(now.getTime() + MS_DAY), tz);
+
+  // Coarse staleness bucket — keep the hash stable across minute drift.
+  let ageMinutes = null;
+  if (cache.generatedAt) {
+    const gen = new Date(cache.generatedAt).getTime();
+    if (Number.isFinite(gen)) {
+      ageMinutes = Math.max(0, Math.round((now.getTime() - gen) / 60000));
+    }
+  }
+  let freshness = 'unknown';
+  if (ageMinutes !== null) {
+    if (ageMinutes <= 45) freshness = 'fresh';
+    else if (ageMinutes <= 180) freshness = 'stale';
+    else freshness = 'expired';
+  }
+
+  const cleaned = cache.events
+    .filter((e) => e && e.title && e.start && e.end)
+    .filter((e) => !CANCELLED_RE.test(e.title))
+    .filter((e) => e.responseStatus !== 'declined')
+    .map((e) => ({
+      ...e,
+      _start: new Date(e.start),
+      _end: new Date(e.end),
+      _online: isOnlineEvent(e),
+    }))
+    .filter((e) => !Number.isNaN(e._start.getTime()) && !Number.isNaN(e._end.getTime()));
+
+  // "Today" and "tomorrow" are defined in the user's tz — straddling
+  // midnight across UTC vs IST would otherwise misclassify events.
+  const todaysEvents = cleaned
+    .filter((e) => localYMDInTz(e._start, tz) === todayYMD)
+    .sort((a, b) => a._start - b._start);
+  const remainingToday = todaysEvents.filter((e) => e._end > now);
+  const tomorrowEvents = cleaned
+    .filter((e) => localYMDInTz(e._start, tz) === tomorrowYMD)
+    .sort((a, b) => a._start - b._start);
+
+  // Pairwise overlaps among remaining today + visible tomorrow window.
+  // Bucketed to titles only — the prompt just needs to know there's a clash.
+  function findConflicts(list) {
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        if (list[i]._end > list[j]._start && list[j]._end > list[i]._start) {
+          out.push({
+            a: list[i].title,
+            b: list[j].title,
+            at: list[i]._start > list[j]._start ? list[i].start : list[j].start,
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  const conflictsToday = findConflicts(remainingToday);
+  const conflictsTomorrow = findConflicts(tomorrowEvents);
+
+  const meetingMsToday = todaysEvents.reduce(
+    (acc, e) => acc + Math.max(0, e._end - e._start),
+    0,
+  );
+  const meetingHoursToday = +(meetingMsToday / 3600000).toFixed(1);
+
+  const trim = (e) => ({
+    title: e.title,
+    start: e.start,
+    end: e.end,
+    organizer: e.organizer || null,
+    attendeeCount: typeof e.attendeeCount === 'number' ? e.attendeeCount : null,
+    responseStatus: e.responseStatus || null,
+    online: e._online,
+    recurring: !!e.isRecurringInstance,
+  });
+
+  const next = remainingToday[0] || tomorrowEvents[0] || null;
+
+  return {
+    freshness,
+    ageBucket:
+      ageMinutes === null
+        ? 'unknown'
+        : ageMinutes < 15
+          ? '<15m'
+          : ageMinutes < 45
+            ? '15-45m'
+            : ageMinutes < 180
+              ? '45m-3h'
+              : '>3h',
+    remainingTodayCount: remainingToday.length,
+    remainingToday: remainingToday.slice(0, 8).map(trim),
+    tomorrowCount: tomorrowEvents.length,
+    tomorrow: tomorrowEvents.slice(0, 5).map(trim),
+    nextEvent: next ? trim(next) : null,
+    meetingHoursToday,
+    conflictsToday: conflictsToday.slice(0, 4),
+    conflictsTomorrow: conflictsTomorrow.slice(0, 4),
+  };
+}
+
+function buildDigest(tasks, projects, now = new Date(), calendarCache = null) {
+  const tz = resolveTimezone(calendarCache);
   const nameOf = (id) => projects.find((p) => p.id === id)?.name || 'Unknown';
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const end = new Date(start);
@@ -357,7 +571,9 @@ function buildDigest(tasks, projects, now = new Date()) {
           priority: !!t.priority,
         })),
     },
-    timeContext: buildTimeContext(now, pendingTodayTotal, completedDueToday.length),
+    timeContext: buildTimeContext(now, pendingTodayTotal, completedDueToday.length, tz),
+    calendar: buildCalendarSlice(calendarCache, now, tz),
+    tz: tz || null,
   };
 }
 
@@ -367,8 +583,8 @@ function buildDigest(tasks, projects, now = new Date()) {
 const WORK_START_HOUR = 10.5;
 const WORK_END_HOUR = 19;
 
-function buildTimeContext(now, pendingTodayTotal, pendingTodayCleared) {
-  const localHour = now.getHours() + now.getMinutes() / 60;
+function buildTimeContext(now, pendingTodayTotal, pendingTodayCleared, tz = null) {
+  const localHour = localHourInTz(now, tz);
   let dayPhase;
   if (localHour < WORK_START_HOUR) dayPhase = 'preWork';
   else if (localHour < 12.5) dayPhase = 'morning';
@@ -404,11 +620,29 @@ function digestHash(digest) {
 }
 
 function deterministicFallback(d) {
+  const fmtHHmm = (iso) => fmtHHmmTz(iso, d.tz || null);
   const lines = [];
   const m = d.momentum || {};
   const tc = d.timeContext || { dayPhase: 'morning', lagging: false };
   const phase = tc.dayPhase;
   const stern = phase === 'afternoon' || phase === 'lateAfternoon';
+  const cal = d.calendar;
+  if (cal && cal.freshness === 'expired') {
+    lines.push('• Calendar feed has gone quiet, sir — worth a glance directly.');
+  } else if (cal && cal.nextEvent) {
+    const t = fmtHHmm(cal.nextEvent.start);
+    const tag = cal.freshness === 'stale' ? ' (feed a touch old)' : '';
+    lines.push(`• Next on the calendar at ${t}, Master Singh: "${cal.nextEvent.title}"${tag}.`);
+  }
+  if (cal && cal.conflictsToday && cal.conflictsToday.length) {
+    const c = cal.conflictsToday[0];
+    lines.push(
+      `• Two events overlap at ${fmtHHmm(c.at)}, sir: "${c.a}" and "${c.b}".`,
+    );
+  }
+  if (cal && cal.meetingHoursToday >= 5) {
+    lines.push(`• A heavy meeting day — ${cal.meetingHoursToday}h booked, Master Singh.`);
+  }
   if (d.overdue.length) {
     const first = d.overdue[0];
     const lateStr = first.daysLate > 0 ? `, ${first.daysLate}d late` : '';
@@ -495,14 +729,16 @@ Priority order for what to include (drop the middle if you run out of room — b
 1. Long-waiting follow-ups (mention the person from waitingOn and days waiting)
 2. Overdue priority items
 3. Other overdue items
-4. Today's remaining deadlines (dueToday — these are the ones NOT yet done)
-5. People he's blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
-6. Floating priority items (no deadline)
-7. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks await your triage, sir"
-8. CLOSING confidence note — ALWAYS the LAST bullet, never earlier. Trigger: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, OR if momentum.pendingTodayTotal > 0. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, instead: "• 7 on the docket today, Master Singh. Best to begin." Reference momentum.completedToday titles only if it sharpens the bullet.
+4. Calendar — next meeting (calendar.nextEvent) and notable shape of the day. ONLY when calendar is present and calendar.freshness is "fresh" or "stale" (not "expired"). Mention calendar.nextEvent.title and start time (HH:mm). If calendar.conflictsToday is non-empty, flag the overlap as its own bullet — "Two events stacked at 15:00, sir: X and Y." If calendar.meetingHoursToday >= 5, name the load: "A heavy meeting day — N hours booked." If calendar.freshness is "stale", append "(calendar feed is N minutes old)" softly the first time it's referenced. If "expired", do NOT cite specific meetings — instead one bullet: "Calendar feed has gone quiet, sir — worth a glance directly."
+5. Today's remaining deadlines (dueToday — these are the ones NOT yet done)
+6. People he's blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
+7. Floating priority items (no deadline)
+8. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks await your triage, sir"
+9. CLOSING confidence note — ALWAYS the LAST bullet, never earlier. Trigger: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, OR if momentum.pendingTodayTotal > 0. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, instead: "• 7 on the docket today, Master Singh. Best to begin." Reference momentum.completedToday titles only if it sharpens the bullet.
 
 Hard rules:
-- Only mention people, projects, or task titles that appear in the JSON. Never invent details.
+- Only mention people, projects, task titles, or meeting titles that appear in the JSON. Never invent details.
+- If calendar is null, do NOT reference any meeting, time, or load. Calendar simply does not exist for this briefing.
 - If a field is null, do not reference it.
 - Numbers must match the JSON exactly.
 - Refer to people as "@name" using the waitingOn value verbatim.
@@ -611,7 +847,8 @@ app.post('/api/briefing', async (req, res) => {
   const refresh =
     req.query.refresh === '1' || req.query.refresh === 'true' || req.body?.refresh === true;
   const data = await readData();
-  const digest = buildDigest(data.tasks, data.projects);
+  const calendarCache = await loadCalendarCache();
+  const digest = buildDigest(data.tasks, data.projects, new Date(), calendarCache);
   const hash = digestHash(digest);
 
   const cached = data.briefing;
