@@ -23,6 +23,9 @@ npm-debug.log*
 # Must stay out of git once calendar auth is wired up.
 server/data.json
 
+# calendar cache populated by Codex on a 30-min schedule. Work data.
+cache/
+
 # claude
 .claude/settings.local.json
 

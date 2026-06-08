@@ -26,6 +26,14 @@ function sourceLabel(src) {
   return src || '';
 }
 
+function calendarChipLabel(cal) {
+  if (!cal) return null;
+  if (cal.freshness === 'fresh') return '📅 live';
+  if (cal.freshness === 'stale') return '📅 stale';
+  if (cal.freshness === 'expired') return '📅 offline';
+  return null;
+}
+
 export default function TodayBriefing({ tasks }) {
   const [data, setData] = useState(null); // { text, source, cached, generatedAt }
   const [loading, setLoading] = useState(false);
@@ -98,6 +106,13 @@ export default function TodayBriefing({ tasks }) {
     .filter(Boolean)
     .map((l) => l.replace(/^[•\-*]\s*/, ''));
 
+  const cal = data.digest?.calendar;
+  const calChip = calendarChipLabel(cal);
+  const calTitle = cal
+    ? `Calendar feed: ${cal.freshness} (age ${cal.ageBucket})` +
+      (cal.remainingTodayCount != null ? ` · ${cal.remainingTodayCount} left today` : '')
+    : null;
+
   return (
     <div className={`briefing briefing-${data.source}`}>
       <div className="briefing-head">
@@ -109,6 +124,11 @@ export default function TodayBriefing({ tasks }) {
         >
           {sourceLabel(data.source)}
         </span>
+        {calChip && (
+          <span className="briefing-source" title={calTitle}>
+            {calChip}
+          </span>
+        )}
         <button
           className="briefing-refresh"
           title="Re-generate"
