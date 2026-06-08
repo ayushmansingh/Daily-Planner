@@ -217,12 +217,21 @@ function buildDigest(tasks, projects, now = new Date()) {
   // hasn't hit yet.
   const blocked = open.filter((t) => t.waitingOn && !followUpIds.has(t.id));
 
-  const doneToday = tasks.filter(
+  const completedTodayTasks = tasks.filter(
     (t) => t.state === 'done' && t.completedAt && new Date(t.completedAt) >= start,
-  ).length;
+  );
+  const doneToday = completedTodayTasks.length;
   const doneThisWeek = tasks.filter(
     (t) => t.state === 'done' && t.completedAt && new Date(t.completedAt) >= weekStart,
   ).length;
+
+  // "Pending today" = everything that had today's date in play at the start of the day:
+  // tasks still open and due today + tasks already completed today that were due today.
+  // Lets the briefing report concrete progress like "1 of 7 cleared".
+  const completedDueToday = completedTodayTasks.filter(
+    (t) => t.deadline && new Date(t.deadline) >= start && new Date(t.deadline) < end,
+  );
+  const pendingTodayTotal = dueToday.length + completedDueToday.length;
 
   // Local YYYY-MM-DD, not UTC. toISOString() would shift forward/back across timezones.
   const localDate =
@@ -329,7 +338,25 @@ function buildDigest(tasks, projects, now = new Date()) {
       project: nameOf(t.projectId),
       daysSinceCreated: daysFromNow(t.createdAt),
     })),
-    momentum: { doneToday, doneThisWeek },
+    momentum: {
+      doneToday,
+      doneThisWeek,
+      pendingTodayTotal,
+      pendingTodayCleared: completedDueToday.length,
+      completedToday: completedTodayTasks
+        .slice()
+        .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
+        .slice(0, 7)
+        .map((t) => ({
+          title: t.title,
+          project: nameOf(t.projectId),
+          wasDueToday:
+            !!t.deadline &&
+            new Date(t.deadline) >= start &&
+            new Date(t.deadline) < end,
+          priority: !!t.priority,
+        })),
+    },
   };
 }
 
@@ -339,63 +366,74 @@ function digestHash(digest) {
 
 function deterministicFallback(d) {
   const lines = [];
+  const m = d.momentum || {};
   if (d.overdue.length) {
     const first = d.overdue[0];
-    const lateStr = first.daysLate > 0 ? ` (${first.daysLate}d late)` : '';
+    const lateStr = first.daysLate > 0 ? `, ${first.daysLate}d late` : '';
     lines.push(
-      `• ${d.overdue.length} overdue${first.priority ? ', priority first' : ''}: "${first.title}"${lateStr}.`,
+      `• ${d.overdueCount} overdue, sir${first.priority ? ' — priority foremost' : ''}: "${first.title}"${lateStr}.`,
     );
   }
   if (d.followUpsDue.length) {
     const f = d.followUpsDue[0];
-    const who = f.waitingOn ? `@${f.waitingOn}` : 'someone';
-    const wait = f.daysSinceUpdate ? ` (waiting ${f.daysSinceUpdate}d)` : '';
-    lines.push(`• Follow up with ${who} on "${f.title}"${wait}.`);
+    const who = f.waitingOn ? `@${f.waitingOn}` : 'the relevant party';
+    const wait = f.daysSinceUpdate ? `, ${f.daysSinceUpdate}d waiting` : '';
+    lines.push(`• A nudge to ${who} on "${f.title}"${wait}, if I may.`);
   }
   if (d.dueToday.length) {
     lines.push(
-      `• ${d.dueToday.length} due today${d.dueToday.some((t) => t.priority) ? ', some priority' : ''}.`,
+      `• ${d.dueTodayCount} still due today${d.dueToday.some((t) => t.priority) ? ', a few of them priority' : ''}, Master Singh.`,
     );
   }
   if (d.priorityFloating.length) {
     lines.push(
-      `• ${d.priorityFloating.length} priority items still floating without a deadline.`,
+      `• ${d.priorityFloatingCount} priority items adrift without a deadline, sir.`,
     );
   }
   if (d.stale.length) {
-    lines.push(`• ${d.stale.length} tasks gone stale (7+ days untouched).`);
+    lines.push(`• ${d.staleCount} tasks gathering dust — untouched a week or more.`);
   }
-  if (d.momentum.doneToday >= 3) {
-    lines.push(`• ${d.momentum.doneToday} done already today — keep the streak.`);
+  if (m.pendingTodayTotal > 0 && m.pendingTodayCleared > 0) {
+    lines.push(
+      `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} already cleared, Master Singh. Onward.`,
+    );
+  } else if (m.doneToday >= 1) {
+    lines.push(`• ${m.doneToday} done today, sir — quite the head of steam.`);
+  } else if (m.pendingTodayTotal > 0) {
+    lines.push(`• ${m.pendingTodayTotal} on the docket today, Master Singh. Best to begin.`);
   }
   if (lines.length === 0) {
-    lines.push('• Clear runway. Pick a priority task and protect a focus block.');
+    lines.push('• A clear runway, Master Singh. Choose a priority and guard a focus block — the day is yours.');
   }
   return lines.join('\n');
 }
 
-const BRIEFING_SYSTEM_PROMPT = `You write daily morning briefings for a personal task planner used by a product manager.
+const BRIEFING_SYSTEM_PROMPT = `You are Alfred Pennyworth — the unflappable butler from Wayne Manor — serving as personal chief of staff to Master Singh. You write his daily morning briefing.
 
-Voice: a sharp chief of staff. Brief, declarative, action-first. No greetings. No fluff. No "consider", "you might want to", "looks like", "it seems". Be direct.
+Voice: Alfred. Refined English butler. Dry wit, gentle understatement, devoted loyalty. Formal yet warm. A raised eyebrow rather than a raised voice. Direct about hard truths — Alfred never coddles Master Bruce, and he won't coddle Master Singh — but always respectful. Occasional spare dry humour ("if I may, sir") is welcome; theatrical flourishes are not.
 
-Format: 3 to 5 bullet points, each starting with "• ". Total output under 80 words. No header. No closing line.
+Address: always "Master Singh", or "sir" / "Master" as a variation. Never "you" alone in the opening of a bullet without one of those nearby. Never "hey", "hi", "good morning" — Alfred would not.
 
-Priority order for what to include (drop the bottom if you run out of room):
+Format: 3 to 5 bullets, each starting with "• ". Total output under 90 words. No header. No closing line. No emoji.
+
+Priority order for what to include (drop the middle if you run out of room — but the confidence note at the END is mandatory whenever its trigger fires):
 1. Long-waiting follow-ups (mention the person from waitingOn and days waiting)
 2. Overdue priority items
 3. Other overdue items
-4. Today's deadlines
-5. People you're blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
+4. Today's remaining deadlines (dueToday — these are the ones NOT yet done)
+5. People he's blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
 6. Floating priority items (no deadline)
-7. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks waiting to be triaged"
+7. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks await your triage, sir"
+8. CLOSING confidence note — ALWAYS the LAST bullet, never earlier. Trigger: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, OR if momentum.pendingTodayTotal > 0. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, instead: "• 7 on the docket today, Master Singh. Best to begin." Reference momentum.completedToday titles only if it sharpens the bullet.
 
 Hard rules:
 - Only mention people, projects, or task titles that appear in the JSON. Never invent details.
 - If a field is null, do not reference it.
 - Numbers must match the JSON exactly.
 - Refer to people as "@name" using the waitingOn value verbatim.
-- Each bucket has a "*Count" sibling field (overdueCount, dueTodayCount, etc) holding the TRUE total. The array itself is capped at the top items by urgency. When the count exceeds the array length, say so: "5 overdue, top 2: X, Y" — never imply the array is the full list.
-- If overdueCount, followUpsDueCount, dueTodayCount, AND blockedCount are all 0 AND newToTriageCount is 0, output a single bullet: "• Clear runway. Pick a priority task and protect a focus block."
+- Each bucket has a "*Count" sibling field (overdueCount, dueTodayCount, etc) holding the TRUE total. The array itself is capped at the top items by urgency. When the count exceeds the array length, say so: "5 overdue, sir — chief offenders: X, Y" — never imply the array is the full list.
+- dueTodayCount counts what is STILL open today; momentum.pendingTodayTotal counts what was on today's plate in total. They are different — do not conflate.
+- If overdueCount, followUpsDueCount, dueTodayCount, AND blockedCount are all 0 AND newToTriageCount is 0 AND momentum.doneToday is 0, output a single bullet: "• A clear runway, Master Singh. Choose a priority and guard a focus block — the day is yours."
 
 Output ONLY the bullets. No JSON. No preamble. No commentary about the data.`;
 
