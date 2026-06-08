@@ -367,15 +367,6 @@ function digestHash(digest) {
 function deterministicFallback(d) {
   const lines = [];
   const m = d.momentum || {};
-  if (m.pendingTodayTotal > 0 && m.pendingTodayCleared > 0) {
-    lines.push(
-      `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} already cleared, Master Singh. Onward.`,
-    );
-  } else if (m.doneToday >= 1) {
-    lines.push(`• ${m.doneToday} done today, sir — quite the head of steam.`);
-  } else if (m.pendingTodayTotal > 0) {
-    lines.push(`• ${m.pendingTodayTotal} on the docket today, Master Singh. Best to begin.`);
-  }
   if (d.overdue.length) {
     const first = d.overdue[0];
     const lateStr = first.daysLate > 0 ? `, ${first.daysLate}d late` : '';
@@ -402,6 +393,15 @@ function deterministicFallback(d) {
   if (d.stale.length) {
     lines.push(`• ${d.staleCount} tasks gathering dust — untouched a week or more.`);
   }
+  if (m.pendingTodayTotal > 0 && m.pendingTodayCleared > 0) {
+    lines.push(
+      `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} already cleared, Master Singh. Onward.`,
+    );
+  } else if (m.doneToday >= 1) {
+    lines.push(`• ${m.doneToday} done today, sir — quite the head of steam.`);
+  } else if (m.pendingTodayTotal > 0) {
+    lines.push(`• ${m.pendingTodayTotal} on the docket today, Master Singh. Best to begin.`);
+  }
   if (lines.length === 0) {
     lines.push('• A clear runway, Master Singh. Choose a priority and guard a focus block — the day is yours.');
   }
@@ -416,15 +416,15 @@ Address: always "Master Singh", or "sir" / "Master" as a variation. Never "you" 
 
 Format: 3 to 5 bullets, each starting with "• ". Total output under 90 words. No header. No closing line. No emoji.
 
-Priority order for what to include (drop the bottom if you run out of room):
-1. Confidence note: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, lead with one bullet acknowledging the progress in Alfred's voice. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, you may instead gently note "• 7 on the docket today, Master Singh. Best to begin." Reference momentum.completedToday titles only if it sharpens the bullet.
-2. Long-waiting follow-ups (mention the person from waitingOn and days waiting)
-3. Overdue priority items
-4. Other overdue items
-5. Today's remaining deadlines (dueToday — these are the ones NOT yet done)
-6. People he's blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
-7. Floating priority items (no deadline)
-8. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks await your triage, sir"
+Priority order for what to include (drop the middle if you run out of room — but the confidence note at the END is mandatory whenever its trigger fires):
+1. Long-waiting follow-ups (mention the person from waitingOn and days waiting)
+2. Overdue priority items
+3. Other overdue items
+4. Today's remaining deadlines (dueToday — these are the ones NOT yet done)
+5. People he's blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
+6. Floating priority items (no deadline)
+7. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks await your triage, sir"
+8. CLOSING confidence note — ALWAYS the LAST bullet, never earlier. Trigger: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, OR if momentum.pendingTodayTotal > 0. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, instead: "• 7 on the docket today, Master Singh. Best to begin." Reference momentum.completedToday titles only if it sharpens the bullet.
 
 Hard rules:
 - Only mention people, projects, or task titles that appear in the JSON. Never invent details.
