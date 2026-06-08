@@ -357,6 +357,45 @@ function buildDigest(tasks, projects, now = new Date()) {
           priority: !!t.priority,
         })),
     },
+    timeContext: buildTimeContext(now, pendingTodayTotal, completedDueToday.length),
+  };
+}
+
+// Work day shape: roughly 10:30 → 19:00 local. Used to pace the briefing tone:
+// relaxed in the morning, gently firmer past midday, sterner in the afternoon
+// if the user is behind the expected clip.
+const WORK_START_HOUR = 10.5;
+const WORK_END_HOUR = 19;
+
+function buildTimeContext(now, pendingTodayTotal, pendingTodayCleared) {
+  const localHour = now.getHours() + now.getMinutes() / 60;
+  let dayPhase;
+  if (localHour < WORK_START_HOUR) dayPhase = 'preWork';
+  else if (localHour < 12.5) dayPhase = 'morning';
+  else if (localHour < 15) dayPhase = 'midday';
+  else if (localHour < 18) dayPhase = 'afternoon';
+  else if (localHour < WORK_END_HOUR) dayPhase = 'lateAfternoon';
+  else dayPhase = 'evening';
+
+  const workSpan = WORK_END_HOUR - WORK_START_HOUR;
+  const elapsed = Math.max(0, Math.min(workSpan, localHour - WORK_START_HOUR));
+  const workFraction = workSpan > 0 ? elapsed / workSpan : 0;
+  const expectedClearedByNow =
+    pendingTodayTotal > 0 ? Math.round(pendingTodayTotal * workFraction) : 0;
+  const lagging =
+    pendingTodayTotal > 0 &&
+    pendingTodayCleared < expectedClearedByNow &&
+    (dayPhase === 'midday' ||
+      dayPhase === 'afternoon' ||
+      dayPhase === 'lateAfternoon');
+
+  // localHour and workFraction intentionally excluded — they would invalidate
+  // the briefing cache every minute. dayPhase is stable for hours; lagging
+  // and expectedClearedByNow only flip on real changes.
+  return {
+    dayPhase,
+    expectedClearedByNow,
+    lagging,
   };
 }
 
@@ -367,6 +406,9 @@ function digestHash(digest) {
 function deterministicFallback(d) {
   const lines = [];
   const m = d.momentum || {};
+  const tc = d.timeContext || { dayPhase: 'morning', lagging: false };
+  const phase = tc.dayPhase;
+  const stern = phase === 'afternoon' || phase === 'lateAfternoon';
   if (d.overdue.length) {
     const first = d.overdue[0];
     const lateStr = first.daysLate > 0 ? `, ${first.daysLate}d late` : '';
@@ -394,16 +436,40 @@ function deterministicFallback(d) {
     lines.push(`• ${d.staleCount} tasks gathering dust — untouched a week or more.`);
   }
   if (m.pendingTodayTotal > 0 && m.pendingTodayCleared > 0) {
-    lines.push(
-      `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} already cleared, Master Singh. Onward.`,
-    );
+    if (tc.lagging && stern) {
+      lines.push(
+        `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} done, Master Singh — the clock is less generous than it was.`,
+      );
+    } else if (phase === 'evening') {
+      lines.push(
+        `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} settled today, sir. A respectable showing.`,
+      );
+    } else {
+      lines.push(
+        `• ${m.pendingTodayCleared} of ${m.pendingTodayTotal} already cleared, Master Singh. Onward.`,
+      );
+    }
   } else if (m.doneToday >= 1) {
     lines.push(`• ${m.doneToday} done today, sir — quite the head of steam.`);
   } else if (m.pendingTodayTotal > 0) {
-    lines.push(`• ${m.pendingTodayTotal} on the docket today, Master Singh. Best to begin.`);
+    if (stern && tc.lagging) {
+      lines.push(
+        `• ${m.pendingTodayTotal} on today's docket and none yet closed, Master Singh. Time to make a start in earnest.`,
+      );
+    } else if (phase === 'morning' || phase === 'preWork') {
+      lines.push(`• ${m.pendingTodayTotal} on the docket today, Master Singh. A gentle start.`);
+    } else {
+      lines.push(`• ${m.pendingTodayTotal} on the docket today, Master Singh. Best to begin.`);
+    }
   }
   if (lines.length === 0) {
-    lines.push('• A clear runway, Master Singh. Choose a priority and guard a focus block — the day is yours.');
+    if (phase === 'evening') {
+      lines.push('• Nothing outstanding, Master Singh. The day may close in good conscience.');
+    } else if (phase === 'morning' || phase === 'preWork') {
+      lines.push('• A clear runway, Master Singh. A leisurely opening is well earned — choose a priority when you are ready.');
+    } else {
+      lines.push('• A clear runway, Master Singh. Choose a priority and guard a focus block — the day is yours.');
+    }
   }
   return lines.join('\n');
 }
@@ -413,6 +479,15 @@ const BRIEFING_SYSTEM_PROMPT = `You are Alfred Pennyworth — the unflappable bu
 Voice: Alfred. Refined English butler. Dry wit, gentle understatement, devoted loyalty. Formal yet warm. A raised eyebrow rather than a raised voice. Direct about hard truths — Alfred never coddles Master Bruce, and he won't coddle Master Singh — but always respectful. Occasional spare dry humour ("if I may, sir") is welcome; theatrical flourishes are not.
 
 Address: always "Master Singh", or "sir" / "Master" as a variation. Never "you" alone in the opening of a bullet without one of those nearby. Never "hey", "hi", "good morning" — Alfred would not.
+
+Time-of-day pacing — read timeContext.dayPhase and timeContext.lagging (work hours roughly 10:30 – 19:00 local):
+- "preWork" (before 10:30): unhurried, almost conspiratorial. The day hasn't begun. Frame as "when you sit down, sir…".
+- "morning" (10:30 – 12:30): relaxed and encouraging. Soft cadence. "A gentle start, Master Singh." No urgency unless something is genuinely overdue.
+- "midday" (12:30 – 15:00): conversational, slightly more focused. If timeContext.lagging is true, a quiet nudge — "We might pick up the pace a touch, sir."
+- "afternoon" (15:00 – 18:00): firmer. If lagging is true, become sterner — Alfred when he's genuinely concerned. Still respectful, never sharp, but no soft pedalling: "The afternoon is getting on, Master Singh. X still wants doing." Use timeContext.expectedClearedByNow vs momentum.pendingTodayCleared to make the gap concrete if it helps.
+- "lateAfternoon" (18:00 – 19:00): brisk, end-of-day reckoning. Triage tone — what truly must close before the day does.
+- "evening" (after 19:00): retrospective and gentle. The working day is done. Mark what was achieved; flag only what carries into tomorrow. No prodding.
+Tone-shift is mandatory: a morning briefing must not read like an afternoon one.
 
 Format: 3 to 5 bullets, each starting with "• ". Total output under 90 words. No header. No closing line. No emoji.
 
