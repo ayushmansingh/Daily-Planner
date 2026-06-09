@@ -734,7 +734,7 @@ Priority order for what to include (drop the middle if you run out of room — b
 6. People he's blocked on from "blocked" (mention @name and days waiting) — especially if waiting >3 days
 7. Floating priority items (no deadline)
 8. Untriaged backlog: if newToTriageCount >= 3, mention it as one bullet — "N tasks await your triage, sir"
-9. CLOSING confidence note — ALWAYS the LAST bullet, never earlier. Trigger: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, OR if momentum.pendingTodayTotal > 0. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, instead: "• 7 on the docket today, Master Singh. Best to begin." Reference momentum.completedToday titles only if it sharpens the bullet.
+9. CLOSING confidence note — ALWAYS the LAST bullet, never earlier. Trigger: if momentum.pendingTodayTotal > 0 AND momentum.pendingTodayCleared > 0, OR if momentum.doneToday >= 1, OR if momentum.pendingTodayTotal > 0. Use the exact numbers — e.g. "• A solid 1 of 7 already cleared, Master Singh. Onward." or "• 3 done today, sir — quite the head of steam." If pendingTodayTotal > 0 but pendingTodayCleared is 0, instead: "• 7 on the docket today, Master Singh. Best to begin."
 
 Hard rules:
 - Only mention people, projects, task titles, or meeting titles that appear in the JSON. Never invent details.
@@ -751,6 +751,59 @@ Output ONLY the bullets. No JSON. No preamble. No commentary about the data.`;
 // Haiku 4.5 pricing as of 2025-2026 (USD per million tokens).
 // Source: https://docs.anthropic.com/en/docs/about-claude/models
 const HAIKU_PRICING = { inputPerMTok: 1.0, outputPerMTok: 5.0 };
+
+// Trim a task entry to only the fields the prompt references. The rich
+// digest stays available on /api/briefing for the UI; this is the
+// version we hand to Haiku.
+function slimTask(t, fields) {
+  const out = {};
+  for (const f of fields) if (t[f] !== undefined && t[f] !== null) out[f] = t[f];
+  return out;
+}
+
+function slimDigestForLLM(d) {
+  const slim = {
+    date: d.date,
+    overdueCount: d.overdueCount,
+    overdue: d.overdue.map((t) =>
+      slimTask(t, ['title', 'project', 'priority', 'daysLate', 'waitingOn']),
+    ),
+    dueTodayCount: d.dueTodayCount,
+    dueToday: d.dueToday.map((t) => slimTask(t, ['title', 'priority'])),
+    followUpsDueCount: d.followUpsDueCount,
+    followUpsDue: d.followUpsDue.map((t) =>
+      slimTask(t, ['title', 'waitingOn', 'daysSinceUpdate']),
+    ),
+    priorityFloatingCount: d.priorityFloatingCount,
+    priorityFloating: d.priorityFloating.map((t) =>
+      slimTask(t, ['title', 'daysSinceUpdate']),
+    ),
+    blockedCount: d.blockedCount,
+    blocked: d.blocked.map((t) =>
+      slimTask(t, ['title', 'waitingOn', 'daysWaiting']),
+    ),
+    newToTriageCount: d.newToTriageCount,
+    momentum: {
+      doneToday: d.momentum.doneToday,
+      pendingTodayTotal: d.momentum.pendingTodayTotal,
+      pendingTodayCleared: d.momentum.pendingTodayCleared,
+    },
+    timeContext: d.timeContext,
+  };
+  if (d.calendar) {
+    const c = d.calendar;
+    slim.calendar = {
+      freshness: c.freshness,
+      remainingTodayCount: c.remainingTodayCount,
+      nextEvent: c.nextEvent
+        ? { title: c.nextEvent.title, start: c.nextEvent.start }
+        : null,
+      meetingHoursToday: c.meetingHoursToday,
+      conflictsToday: c.conflictsToday.slice(0, 2),
+    };
+  }
+  return slim;
+}
 
 function haikuCostUSD(usage) {
   if (!usage) return 0;
@@ -774,7 +827,7 @@ async function callHaiku(digest, apiKey) {
         max_tokens: 300,
         system: BRIEFING_SYSTEM_PROMPT,
         messages: [
-          { role: 'user', content: JSON.stringify(digest, null, 2) },
+          { role: 'user', content: JSON.stringify(slimDigestForLLM(digest)) },
         ],
       }),
     });
@@ -843,6 +896,12 @@ function recordHaikuUsage(data, usage) {
   );
 }
 
+// Don't burn a Haiku call if we just made one. The digest hash drifts often
+// (a meeting passes, a task completes) and most of those drifts don't change
+// what Alfred would say. Forced refresh (↻ button) bypasses this.
+const BRIEFING_MIN_AI_INTERVAL_MS =
+  Number(process.env.BRIEFING_MIN_AI_INTERVAL_MS) || 60_000;
+
 app.post('/api/briefing', async (req, res) => {
   const refresh =
     req.query.refresh === '1' || req.query.refresh === 'true' || req.body?.refresh === true;
@@ -852,13 +911,20 @@ app.post('/api/briefing', async (req, res) => {
   const hash = digestHash(digest);
 
   const cached = data.briefing;
-  if (
+  const cachedAgeMs = cached?.generatedAt
+    ? Date.now() - new Date(cached.generatedAt).getTime()
+    : Infinity;
+  const cacheExactHit =
+    cached && cached.hash === hash && cached.date === digest.date && cached.text;
+  const cacheCoalesce =
     !refresh &&
     cached &&
-    cached.hash === hash &&
+    cached.text &&
+    cached.source === 'haiku' &&
     cached.date === digest.date &&
-    cached.text
-  ) {
+    cachedAgeMs < BRIEFING_MIN_AI_INTERVAL_MS;
+
+  if (!refresh && (cacheExactHit || cacheCoalesce)) {
     return res.json({
       text: cached.text,
       source: cached.source || 'cached',
