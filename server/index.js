@@ -900,7 +900,7 @@ function recordHaikuUsage(data, usage) {
 // (a meeting passes, a task completes) and most of those drifts don't change
 // what Alfred would say. Forced refresh (↻ button) bypasses this.
 const BRIEFING_MIN_AI_INTERVAL_MS =
-  Number(process.env.BRIEFING_MIN_AI_INTERVAL_MS) || 60_000;
+  Number(process.env.BRIEFING_MIN_AI_INTERVAL_MS) || 600_000;
 
 app.post('/api/briefing', async (req, res) => {
   const refresh =
